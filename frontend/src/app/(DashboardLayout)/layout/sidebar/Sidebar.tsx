@@ -81,7 +81,7 @@ const SubmenuBlock = ({
     <div>
       <button
         type='button'
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen((v: boolean) => !v)}
         className={`w-full flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-link hover:bg-lightprimary hover:text-primary ${
           childActive ? 'text-primary font-medium' : ''
         }`}
