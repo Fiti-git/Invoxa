@@ -37,12 +37,12 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-invoxa}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-invoxa}
       REDIS_URL: redis://redis:6379/0
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://123.231.60.24:8006,http://localhost:8006}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://123.231.60.24:1612,http://192.168.121.227:8008,http://localhost:8008}
       DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME:-admin}
       DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:-admin}
       DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL:-admin@invoxa.local}
     ports:
-      - "8005:8005"
+      - "8007:8005"
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,13 +76,13 @@ services:
       context: ./frontend
       target: runner
       args:
-        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://123.231.60.24:8005/api}
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://123.231.60.24:1611/api}
     restart: unless-stopped
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://123.231.60.24:8005/api}
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://123.231.60.24:1611/api}
     ports:
-      - "8006:3000"
+      - "8008:3000"
     depends_on:
       - backend
 
