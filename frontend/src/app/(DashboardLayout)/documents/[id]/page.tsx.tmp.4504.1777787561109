@@ -1,0 +1,663 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+import { Icon } from "@iconify/react";
+import { api, ApiError } from "@/lib/api";
+import { useToast } from "@/lib/toast";
+import { InvoiceSchema } from "@/lib/schemas";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+
+type Line = {
+  id?: number;
+  line_no: number;
+  description: string;
+  unit_qty: string | number;
+  free_qty: string | number;
+  unit_price: string | number;
+  line_discount: string | number;
+  gross_value: string | number;
+};
+
+type LogEntry = {
+  id: number;
+  level: "INFO" | "WARN" | "ERROR";
+  message: string;
+  progress: number | null;
+  created_at: string;
+};
+
+type Invoice = {
+  id: number;
+  updated_at: string;
+  index_in_document: number;
+  invoice_number: string;
+  invoice_date: string | null;
+  customer_name: string;
+  customer_code: string;
+  customer_address: string;
+  customer_tel: string;
+  sales_rep: string;
+  route: string;
+  territory: string;
+  payment_type: string;
+  gross_total: string | number;
+  line_discount_total: string | number;
+  header_discount_total: string | number;
+  return_total: string | number;
+  net_total: string | number;
+  currency: string;
+  status: string;
+  committed_at: string | null;
+  extra_json: any;
+  lines: Line[];
+};
+
+const emptyLine = (n: number): Line => ({
+  line_no: n,
+  description: "",
+  unit_qty: 0,
+  free_qty: 0,
+  unit_price: 0,
+  line_discount: 0,
+  gross_value: 0,
+});
+
+const num = (v: any) => (v === "" || v == null ? 0 : Number(v) || 0);
+
+export default function DocumentDetailPage() {
+  const { id } = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
+  const toast = useToast();
+  const [doc, setDoc] = useState<any>(null);
+  const [err, setErr] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [search, setSearch] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const logSinceRef = useRef(0);
+
+  const load = () =>
+    api
+      .getDocument(id)
+      .then(setDoc)
+      .catch((e) => setErr(String(e)));
+
+  useEffect(() => {
+    load();
+    const t = setInterval(() => {
+      if (doc?.status === "EXTRACTING" || doc?.status === "UPLOADED") load();
+    }, 2500);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, doc?.status]);
+
+  // Live tail of extraction logs while running.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const r = await api.documentLogs(id, logSinceRef.current);
+        if (r.logs?.length) {
+          logSinceRef.current = r.logs[r.logs.length - 1].id;
+          setLogs((prev) => [...prev, ...r.logs].slice(-200));
+        }
+        // Keep doc.progress_percent in sync without reloading invoices
+        setDoc((d: any) =>
+          d ? { ...d, progress_percent: r.progress_percent, status: r.status } : d
+        );
+      } catch {
+        // ignore transient log errors
+      }
+    };
+    const iv = setInterval(() => {
+      if (doc?.status === "EXTRACTING" || doc?.status === "UPLOADED") tick();
+    }, 1500);
+    tick();
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, doc?.status]);
+
+  const invoices: Invoice[] = doc?.invoices || [];
+
+  // Honor ?invoice=<index_in_document> when navigating in from /invoices
+  useEffect(() => {
+    const wanted = searchParams.get("invoice");
+    if (!wanted || !invoices.length) return;
+    const target = parseInt(wanted, 10);
+    const found = invoices.findIndex((x) => x.index_in_document === target);
+    if (found >= 0) setActiveIdx(found);
+  }, [invoices, searchParams]);
+
+  const inv = invoices[activeIdx];
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return invoices.map((x, i) => ({ x, i }));
+    return invoices
+      .map((x, i) => ({ x, i }))
+      .filter(
+        ({ x }) =>
+          (x.invoice_number || "").toLowerCase().includes(q) ||
+          (x.customer_name || "").toLowerCase().includes(q) ||
+          (x.customer_code || "").toLowerCase().includes(q)
+      );
+  }, [invoices, search]);
+
+  const updateInv = (patch: Partial<Invoice>) => {
+    setDoc({
+      ...doc,
+      invoices: invoices.map((x, i) =>
+        i === activeIdx ? { ...x, ...patch } : x
+      ),
+    });
+  };
+
+  const updateLine = (lineIdx: number, patch: Partial<Line>) => {
+    if (!inv) return;
+    const next = inv.lines.map((l, i) => {
+      if (i !== lineIdx) return l;
+      const merged = { ...l, ...patch };
+      // auto-recompute gross when qty/unit/discount edits happen
+      if (
+        patch.unit_qty !== undefined ||
+        patch.unit_price !== undefined ||
+        patch.line_discount !== undefined
+      ) {
+        const g =
+          num(merged.unit_qty) * num(merged.unit_price) -
+          num(merged.line_discount);
+        merged.gross_value = g.toFixed(2);
+      }
+      return merged;
+    });
+    updateInv({ lines: next });
+  };
+
+  const addLine = () => {
+    if (!inv) return;
+    updateInv({ lines: [...inv.lines, emptyLine(inv.lines.length + 1)] });
+  };
+
+  const removeLine = (lineIdx: number) => {
+    if (!inv) return;
+    updateInv({
+      lines: inv.lines
+        .filter((_, i) => i !== lineIdx)
+        .map((l, i) => ({ ...l, line_no: i + 1 })),
+    });
+  };
+
+  const save = async () => {
+    if (!inv) return;
+    // Client-side validation
+    const parsed = InvoiceSchema.safeParse(inv);
+    if (!parsed.success) {
+      toast.error(parsed.error.issues.slice(0, 3).map((i) => i.message).join("\n"));
+      return;
+    }
+    setBusy(true);
+    try {
+      const { id: invId, document: _doc, line_count: _lc, document_file_name: _fn, ...rest } = inv as any;
+      await api.patchInvoice(invId, rest);
+      toast.success("Saved.");
+      await load();
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "STALE") {
+        toast.error("Someone else edited this invoice. Reloading the latest version.");
+        await load();
+      } else {
+        toast.error(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const commit = async () => {
+    if (!inv) return;
+    setBusy(true);
+    try {
+      await api.commitInvoice(inv.id);
+      toast.success("Committed.");
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reextract = async () => {
+    await api.reextract(doc.id);
+    await load();
+  };
+
+  const mergeNext = async () => {
+    if (!inv) return;
+    if (!confirm("Merge this invoice with the next one? Lines will be combined.")) return;
+    setBusy(true);
+    try {
+      await api.mergeNextInvoice(inv.id);
+      toast.success("Merged with next invoice.");
+      await load();
+    } catch (e: any) {
+      toast.error(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (err) return <div className="p-4 text-red-700">{err}</div>;
+  if (!doc) return <div className="p-4 opacity-60">Loading…</div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">{doc.file_name}</h1>
+          <div className="text-sm opacity-70">
+            Status: <strong>{doc.status}</strong> · Template:{" "}
+            {doc.template_guess || "—"} · {invoices.length} invoice(s)
+          </div>
+        </div>
+        <Button variant="outline" onClick={reextract}>
+          Re-extract
+        </Button>
+      </div>
+
+      {doc.status === "FAILED" && doc.error_message && (
+        <div className="p-3 rounded bg-red-50 text-red-700 text-sm">
+          {doc.error_message}
+        </div>
+      )}
+
+      {doc.status !== "DRAFT" && doc.status !== "COMMITTED" ? (
+        <ProgressPanel doc={doc} logs={logs} />
+      ) : (
+        <div className="grid grid-cols-12 gap-4">
+          {/* PDF */}
+          <div className="col-span-12 lg:col-span-5">
+            <div className="rounded-xl bg-background border h-[82vh] overflow-hidden sticky top-[84px]">
+              {doc.file_url ? (
+                <iframe src={doc.file_url} className="w-full h-full" />
+              ) : (
+                <div className="p-4 opacity-60">No file URL</div>
+              )}
+            </div>
+          </div>
+
+          {/* Invoice picker + form */}
+          <div className="col-span-12 lg:col-span-7 space-y-3">
+            {/* Invoice navigator */}
+            <div className="rounded-xl bg-background border p-3 flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={activeIdx === 0}
+                onClick={() => setActiveIdx((i) => Math.max(0, i - 1))}
+              >
+                <Icon icon="solar:alt-arrow-left-linear" width={16} />
+              </Button>
+              <div className="text-sm font-medium">
+                Invoice {activeIdx + 1} of {invoices.length}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={activeIdx >= invoices.length - 1}
+                onClick={() =>
+                  setActiveIdx((i) => Math.min(invoices.length - 1, i + 1))
+                }
+              >
+                <Icon icon="solar:alt-arrow-right-linear" width={16} />
+              </Button>
+
+              <div className="flex-1 min-w-[200px] relative">
+                <Icon
+                  icon="solar:magnifer-linear"
+                  width={16}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 opacity-60"
+                />
+                <Input
+                  className="pl-9"
+                  placeholder="Search by invoice #, customer, code…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+
+              <select
+                className="border rounded-md h-9 px-2 bg-background text-sm max-w-[260px]"
+                value={activeIdx}
+                onChange={(e) => setActiveIdx(Number(e.target.value))}
+              >
+                {filtered.map(({ x, i }) => (
+                  <option key={x.id} value={i}>
+                    #{x.index_in_document + 1}
+                    {x.invoice_number ? ` · ${x.invoice_number}` : ""}
+                    {x.customer_name ? ` — ${x.customer_name}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Compact list (only shown when reasonable count) */}
+            {invoices.length <= 200 && (
+              <div className="rounded-xl bg-background border max-h-[160px] overflow-y-auto">
+                {filtered.map(({ x, i }) => (
+                  <button
+                    key={x.id}
+                    onClick={() => setActiveIdx(i)}
+                    className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 ${
+                      i === activeIdx
+                        ? "bg-lightprimary text-primary font-medium"
+                        : "hover:bg-lightprimary/40"
+                    }`}
+                  >
+                    <span className="opacity-60 w-10">
+                      #{x.index_in_document + 1}
+                    </span>
+                    <span className="font-medium truncate w-32">
+                      {x.invoice_number || "—"}
+                    </span>
+                    <span className="truncate flex-1 opacity-80">
+                      {x.customer_name}
+                    </span>
+                    {x.status === "COMMITTED" && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary">
+                        committed
+                      </span>
+                    )}
+                  </button>
+                ))}
+                {!filtered.length && (
+                  <div className="px-3 py-4 text-center text-sm opacity-60">
+                    No matches.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Form */}
+            {inv && (
+              <div className="rounded-xl bg-background border p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-link">
+                    Invoice <strong>#{inv.index_in_document + 1}</strong>
+                  </div>
+                  <span
+                    className={`text-[11px] px-2 py-0.5 rounded ${
+                      inv.status === "COMMITTED"
+                        ? "bg-primary/15 text-primary"
+                        : inv.status === "EDITED"
+                        ? "bg-secondary/20 text-secondary"
+                        : "bg-gray-200 text-gray-700"
+                    }`}
+                  >
+                    {inv.status}
+                  </span>
+                </div>
+                {/* Invoice header */}
+                <Section title="Invoice">
+                  <Field label="Invoice #" value={inv.invoice_number}
+                    onChange={(v) => updateInv({ invoice_number: v })} />
+                  <Field label="Date (YYYY-MM-DD)" value={inv.invoice_date || ""}
+                    onChange={(v) => updateInv({ invoice_date: v })} />
+                  <Field label="Currency" value={inv.currency}
+                    onChange={(v) => updateInv({ currency: v })} />
+                  <Field label="Payment type" value={inv.payment_type}
+                    onChange={(v) => updateInv({ payment_type: v })} />
+                </Section>
+
+                {/* Customer */}
+                <Section title="Customer">
+                  <Field label="Name" value={inv.customer_name}
+                    onChange={(v) => updateInv({ customer_name: v })} />
+                  <Field label="Code" value={inv.customer_code}
+                    onChange={(v) => updateInv({ customer_code: v })} />
+                  <Field label="Address" value={inv.customer_address} colSpan={2}
+                    onChange={(v) => updateInv({ customer_address: v })} />
+                  <Field label="Telephone" value={inv.customer_tel}
+                    onChange={(v) => updateInv({ customer_tel: v })} />
+                </Section>
+
+                {/* Sales */}
+                <Section title="Sales">
+                  <Field label="Sales rep" value={inv.sales_rep}
+                    onChange={(v) => updateInv({ sales_rep: v })} />
+                  <Field label="Route" value={inv.route}
+                    onChange={(v) => updateInv({ route: v })} />
+                  <Field label="Territory" value={inv.territory}
+                    onChange={(v) => updateInv({ territory: v })} />
+                </Section>
+
+                {/* Totals */}
+                <Section title="Totals">
+                  <Field label="Gross total" value={String(inv.gross_total ?? "")}
+                    onChange={(v) => updateInv({ gross_total: v as any })} numeric />
+                  <Field label="Line discount total" value={String(inv.line_discount_total ?? "")}
+                    onChange={(v) => updateInv({ line_discount_total: v as any })} numeric />
+                  <Field label="Header discount total" value={String(inv.header_discount_total ?? "")}
+                    onChange={(v) => updateInv({ header_discount_total: v as any })} numeric />
+                  <Field label="Return total" value={String(inv.return_total ?? "")}
+                    onChange={(v) => updateInv({ return_total: v as any })} numeric />
+                  <Field label="Net total" value={String(inv.net_total ?? "")}
+                    onChange={(v) => updateInv({ net_total: v as any })} numeric />
+                </Section>
+
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm font-semibold">Lines</div>
+                    <Button size="sm" variant="outline" onClick={addLine}>
+                      <Icon icon="solar:add-circle-linear" width={16} className="mr-1" />
+                      Add line
+                    </Button>
+                  </div>
+                  <div className="overflow-x-auto rounded-lg border">
+                    <table className="w-full text-xs">
+                      <thead className="bg-lightgray text-left">
+                        <tr>
+                          <th className="px-2 py-2 w-8">#</th>
+                          <th className="px-2 py-2">Description</th>
+                          <th className="px-2 py-2 w-20">Qty</th>
+                          <th className="px-2 py-2 w-20">Free</th>
+                          <th className="px-2 py-2 w-24">Unit</th>
+                          <th className="px-2 py-2 w-20">Disc</th>
+                          <th className="px-2 py-2 w-24">Gross</th>
+                          <th className="px-2 py-2 w-8"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {inv.lines.map((l, i) => (
+                          <tr key={l.id ?? `new-${i}`} className="border-t">
+                            <td className="px-2 py-1 align-middle text-link">
+                              {l.line_no}
+                            </td>
+                            <td className="px-2 py-1">
+                              <CellInput
+                                value={l.description}
+                                onChange={(v) =>
+                                  updateLine(i, { description: v })
+                                }
+                              />
+                            </td>
+                            <td className="px-2 py-1">
+                              <CellInput
+                                value={l.unit_qty}
+                                onChange={(v) =>
+                                  updateLine(i, { unit_qty: v })
+                                }
+                                numeric
+                              />
+                            </td>
+                            <td className="px-2 py-1">
+                              <CellInput
+                                value={l.free_qty}
+                                onChange={(v) =>
+                                  updateLine(i, { free_qty: v })
+                                }
+                                numeric
+                              />
+                            </td>
+                            <td className="px-2 py-1">
+                              <CellInput
+                                value={l.unit_price}
+                                onChange={(v) =>
+                                  updateLine(i, { unit_price: v })
+                                }
+                                numeric
+                              />
+                            </td>
+                            <td className="px-2 py-1">
+                              <CellInput
+                                value={l.line_discount}
+                                onChange={(v) =>
+                                  updateLine(i, { line_discount: v })
+                                }
+                                numeric
+                              />
+                            </td>
+                            <td className="px-2 py-1">
+                              <CellInput
+                                value={l.gross_value}
+                                onChange={(v) =>
+                                  updateLine(i, { gross_value: v })
+                                }
+                                numeric
+                              />
+                            </td>
+                            <td className="px-2 py-1 text-right">
+                              <button
+                                onClick={() => removeLine(i)}
+                                className="text-red-500 hover:text-red-700"
+                                title="Remove"
+                              >
+                                <Icon icon="solar:trash-bin-trash-linear" width={16} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {!inv.lines.length && (
+                          <tr>
+                            <td colSpan={8} className="px-2 py-4 text-center opacity-60">
+                              No lines. Click <strong>Add line</strong>.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Extras (raw JSON from extraction) */}
+                {inv.extra_json && Object.keys(inv.extra_json).length > 0 && (
+                  <details className="rounded-lg border p-3 text-xs">
+                    <summary className="cursor-pointer font-semibold text-link">
+                      Extra fields (extracted JSON)
+                    </summary>
+                    <pre className="mt-2 overflow-x-auto text-[11px] bg-lightgray rounded p-2">
+                      {JSON.stringify(inv.extra_json, null, 2)}
+                    </pre>
+                  </details>
+                )}
+
+                <div className="flex gap-2 justify-between items-center pt-2 flex-wrap">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={mergeNext}
+                    disabled={
+                      busy ||
+                      activeIdx >= invoices.length - 1 ||
+                      inv.status === "COMMITTED"
+                    }
+                    title="Combine this invoice with the next one (for multi-page invoices that got split)"
+                  >
+                    <Icon icon="solar:layers-minimalistic-linear" width={16} className="mr-1" />
+                    Merge with next
+                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={save}
+                      disabled={busy || inv.status === "COMMITTED"}
+                    >
+                      {busy ? "Saving…" : "Save draft"}
+                    </Button>
+                    <Button
+                      onClick={commit}
+                      disabled={busy || inv.status === "COMMITTED"}
+                    >
+                      {inv.status === "COMMITTED" ? "Committed" : "Commit"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-link/80">
+        {title}
+      </div>
+      <div className="grid grid-cols-2 gap-3">{children}</div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  colSpan,
+  numeric,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  colSpan?: 1 | 2;
+  numeric?: boolean;
+}) {
+  return (
+    <label className={`text-xs ${colSpan === 2 ? "col-span-2" : ""}`}>
+      <div className="opacity-70 mb-1">{label}</div>
+      <Input
+        value={value || ""}
+        inputMode={numeric ? "decimal" : undefined}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  );
+}
+
+function CellInput({
+  value,
+  onChange,
+  numeric,
+}: {
+  value: any;
+  onChange: (v: string) => void;
+  numeric?: boolean;
+}) {
+  return (
+    <input
+      className="w-full px-1.5 py-1 border rounded bg-transparent text-xs focus:outline-none focus:border-primary"
+      value={value ?? ""}
+      inputMode={numeric ? "decimal" : undefined}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
+}

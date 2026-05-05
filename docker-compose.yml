@@ -1,0 +1,91 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-invoxa}
+      POSTGRES_USER: ${POSTGRES_USER:-invoxa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-invoxa}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-invoxa}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    expose:
+      - "6379"
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    command: gunicorn invoxa.wsgi:application --bind 0.0.0.0:8005 --workers 3 --timeout 120
+    volumes:
+      - mediadata:/app/media
+    environment:
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-insecure-change-me}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-invoxa}
+      POSTGRES_USER: ${POSTGRES_USER:-invoxa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-invoxa}
+      REDIS_URL: redis://redis:6379/0
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://123.231.60.24:8006,http://localhost:8006}
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME:-admin}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:-admin}
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL:-admin@invoxa.local}
+    ports:
+      - "8005:8005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "-c"]
+    command: ["celery -A invoxa worker -l info -Q default,extraction"]
+    volumes:
+      - mediadata:/app/media
+    environment:
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-insecure-change-me}
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-invoxa}
+      POSTGRES_USER: ${POSTGRES_USER:-invoxa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-invoxa}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # Production frontend (Next standalone) - host port 8006
+  frontend:
+    build:
+      context: ./frontend
+      target: runner
+      args:
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://123.231.60.24:8005/api}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://123.231.60.24:8005/api}
+    ports:
+      - "8006:3000"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  mediadata:
