@@ -34,17 +34,24 @@ class GeminiProvider(LlmProvider):
 
         client = genai.Client(api_key=self.api_key)
 
+        # Disable thinking when SDK supports it — invoice extraction is
+        # deterministic + schema-bound, so reasoning tokens are pure waste.
+        # Older SDKs don't expose ThinkingConfig; fall back gracefully.
+        gen_kwargs = {
+            "response_mime_type": "application/json",
+            "temperature": 0.0,
+        }
+        ThinkingConfig = getattr(types, "ThinkingConfig", None)
+        if ThinkingConfig is not None:
+            gen_kwargs["thinking_config"] = ThinkingConfig(thinking_budget=0)
+
         response = client.models.generate_content(
             model=self.model,
             contents=[
                 types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
                 prompt,
             ],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.0,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
+            config=types.GenerateContentConfig(**gen_kwargs),
         )
 
         text = response.text or ""
