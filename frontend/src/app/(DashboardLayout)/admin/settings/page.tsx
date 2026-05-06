@@ -2,10 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
 export default function SettingsPage() {
+  const { hasPerm } = useAuth();
+  const canSeeBilling = hasPerm("billing.view");
   const [state, setState] = useState<any>(null);
   const [geminiKey, setGeminiKey] = useState("");
   const [geminiModel, setGeminiModel] = useState("gemini-2.5-flash");
@@ -18,16 +21,15 @@ export default function SettingsPage() {
   const [capInput, setCapInput] = useState("");
 
   const loadAll = async () => {
-    const [s, summary, c] = await Promise.all([
-      api.getSettings(),
-      api.costSummary(),
-      api.getCap(),
-    ]);
+    const s = await api.getSettings();
     setState(s);
     if (s.GEMINI_MODEL?.value) setGeminiModel(s.GEMINI_MODEL.value);
-    setFx(summary.fx);
-    setCap(c);
-    setCapInput(c?.monthly_cap_lkr ?? "0");
+    if (canSeeBilling) {
+      const [summary, c] = await Promise.all([api.costSummary(), api.getCap()]);
+      setFx(summary.fx);
+      setCap(c);
+      setCapInput(c?.monthly_cap_lkr ?? "0");
+    }
   };
 
   useEffect(() => {
@@ -125,6 +127,7 @@ export default function SettingsPage() {
               . Rate is refreshed daily and used to convert billed cost.
             </p>
           </div>
+          {canSeeBilling && (
           <div className="text-right text-sm">
             <div className="text-link text-xs">Current rate</div>
             <div className="font-semibold">
@@ -133,6 +136,7 @@ export default function SettingsPage() {
                 : "—"}
             </div>
           </div>
+          )}
         </div>
 
         <div>
@@ -150,11 +154,13 @@ export default function SettingsPage() {
           />
         </div>
 
+        {canSeeBilling && (
         <div>
           <Button variant="outline" onClick={refreshFx} disabled={fxBusy}>
             {fxBusy ? "Refreshing…" : "Refresh rate now"}
           </Button>
         </div>
+        )}
       </div>
 
       <div className="flex items-center gap-3">
@@ -164,7 +170,8 @@ export default function SettingsPage() {
         {msg && <span className="text-sm opacity-70">{msg}</span>}
       </div>
 
-      {/* Spend cap */}
+      {/* Spend cap — only billing roles */}
+      {canSeeBilling && (
       <div className="rounded-xl border bg-background p-5 space-y-3">
         <h2 className="font-semibold">Monthly spend cap</h2>
         <p className="text-xs text-link">
@@ -213,6 +220,7 @@ export default function SettingsPage() {
           </Button>
         </div>
       </div>
+      )}
     </div>
   );
 }

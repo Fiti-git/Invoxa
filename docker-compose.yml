@@ -44,6 +44,11 @@ services:
       INVOXA_ACC_USERNAME: ${INVOXA_ACC_USERNAME:-acc}
       INVOXA_ACC_PASSWORD: ${INVOXA_ACC_PASSWORD:-acc}
       INVOXA_ACC_EMAIL: ${INVOXA_ACC_EMAIL:-acc@invoxa.local}
+      # API keys — env wins over DB-encrypted Settings page.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      EXCHANGERATE_API_KEY: ${EXCHANGERATE_API_KEY:-}
+      FX_MARKUP_LKR: ${FX_MARKUP_LKR:-5}
     ports:
       - "8007:8005"
     depends_on:
@@ -67,6 +72,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-invoxa}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-invoxa}
       REDIS_URL: redis://redis:6379/0
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      EXCHANGERATE_API_KEY: ${EXCHANGERATE_API_KEY:-}
+      FX_MARKUP_LKR: ${FX_MARKUP_LKR:-5}
     depends_on:
       postgres:
         condition: service_healthy
