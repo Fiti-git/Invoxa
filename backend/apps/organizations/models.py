@@ -20,28 +20,31 @@ class Membership(models.Model):
     ROLE_MANAGER = "manager"
     ROLE_MEMBER = "member"
     ROLE_VIEWER = "viewer"
+    ROLE_ACCOUNTANT = "accountant"
     ROLE_CHOICES = [
         (ROLE_ADMIN, "Admin"),
         (ROLE_MANAGER, "Manager"),
         (ROLE_MEMBER, "Member"),
         (ROLE_VIEWER, "Viewer"),
+        (ROLE_ACCOUNTANT, "Accountant"),
     ]
 
     PERMISSIONS = {
         ROLE_ADMIN: {
-            "users.manage", "settings.manage", "billing.view",
+            "users.manage", "settings.manage",
             "documents.upload", "documents.delete",
             "invoices.edit", "invoices.commit", "invoices.view",
             "templates.manage",
         },
         ROLE_MANAGER: {
-            "billing.view", "documents.upload", "documents.delete",
+            "documents.upload", "documents.delete",
             "invoices.edit", "invoices.commit", "invoices.view",
         },
         ROLE_MEMBER: {
             "documents.upload", "invoices.edit", "invoices.view",
         },
         ROLE_VIEWER: {"invoices.view"},
+        ROLE_ACCOUNTANT: {"billing.view"},
     }
 
     user = models.ForeignKey(

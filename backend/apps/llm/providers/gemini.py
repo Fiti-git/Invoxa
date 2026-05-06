@@ -43,6 +43,7 @@ class GeminiProvider(LlmProvider):
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.0,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
 
@@ -54,7 +55,17 @@ class GeminiProvider(LlmProvider):
 
         usage = getattr(response, "usage_metadata", None)
         input_tokens = getattr(usage, "prompt_token_count", 0) or 0
-        output_tokens = getattr(usage, "candidates_token_count", 0) or 0
+        candidates_tokens = getattr(usage, "candidates_token_count", 0) or 0
+        thoughts_tokens = getattr(usage, "thoughts_token_count", 0) or 0
+        total_tokens = getattr(usage, "total_token_count", 0) or 0
+
+        # Google bills thinking tokens as output. Prefer total - input as the
+        # source of truth; fall back to candidates + thoughts if total is missing.
+        billable_output = max(total_tokens - input_tokens, 0) if total_tokens else (
+            candidates_tokens + thoughts_tokens
+        )
+        output_tokens = billable_output
+
         raw_cost = (
             input_tokens / 1000.0 * self.input_usd_per_1k
             + output_tokens / 1000.0 * self.output_usd_per_1k

@@ -1,5 +1,6 @@
 """Django settings for Invoxa."""
 import os
+from decimal import Decimal
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -10,6 +11,10 @@ ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "*").split(",")
 
 # Markup is a system-wide constant — applied to every API cost shown to orgs.
 MARKUP_PERCENT = 50
+
+# Flat LKR added on top of the fetched USD→LKR rate (covers bank/processing margin).
+# e.g. API returns 310 → app uses 310 + FX_MARKUP_LKR.
+FX_MARKUP_LKR = Decimal(os.environ.get("FX_MARKUP_LKR", "5"))
 
 INSTALLED_APPS = [
     "django.contrib.admin",

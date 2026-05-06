@@ -3,20 +3,27 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 
 export default function DashboardPage() {
+  const { hasPerm } = useAuth();
+  const canSeeCost = hasPerm("billing.view");
+  const canSeeDocs = hasPerm("invoices.view");
   const [summary, setSummary] = useState<any>(null);
   const [docs, setDocs] = useState<any>(null);
   const [err, setErr] = useState<string>("");
 
   useEffect(() => {
-    Promise.all([api.costSummary(), api.listDocuments()])
+    const calls: Promise<any>[] = [];
+    calls.push(canSeeCost ? api.costSummary() : Promise.resolve(null));
+    calls.push(canSeeDocs ? api.listDocuments() : Promise.resolve(null));
+    Promise.all(calls)
       .then(([s, d]) => {
         setSummary(s);
         setDocs(d);
       })
       .catch((e) => setErr(String(e)));
-  }, []);
+  }, [canSeeCost, canSeeDocs]);
 
   const tile = (label: string, value: string, sub?: string) => (
     <div
@@ -60,7 +67,7 @@ export default function DashboardPage() {
             String(summary.last_7d.extractions),
             `${summary.success_rate_percent}% success`
           )}
-          {tile(
+          {canSeeCost && tile(
             "Cost (last 7d)",
             summary.fx?.available && summary.last_7d.billed_lkr != null
               ? `LKR ${Number(summary.last_7d.billed_lkr).toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -77,9 +84,11 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {canSeeDocs && (
       <div className="rounded-xl border p-5 bg-white">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Recent uploads</h2>
+          {hasPerm("documents.upload") && (
           <Link
             href="/documents/upload"
             className="px-4 py-2 rounded-lg text-white text-sm font-medium"
@@ -87,6 +96,7 @@ export default function DashboardPage() {
           >
             + Upload PDF
           </Link>
+          )}
         </div>
         {docs?.results?.length ? (
           <div className="overflow-x-auto">
@@ -139,6 +149,7 @@ export default function DashboardPage() {
           <p className="opacity-60 text-sm">No documents yet — upload your first PDF.</p>
         )}
       </div>
+      )}
     </div>
   );
 }

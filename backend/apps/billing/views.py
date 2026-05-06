@@ -3,14 +3,14 @@ from decimal import Decimal
 
 from django.db.models import Sum, Count, Avg
 from django.utils import timezone
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.documents.models import Document
 from apps.extraction.models import ExtractionRun
-
 from apps.organizations.models import Organization
+from apps.users.permissions import HasPerm, IsOrgAdmin
 
 from .caps import month_to_date_lkr
 from .fx import refresh_rate, to_lkr, usd_to_lkr_rate
@@ -27,7 +27,7 @@ def _bucket(qs, rate):
 
 
 class CostSummaryView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated, HasPerm("billing.view")]
 
     def get(self, request):
         now = timezone.now()
@@ -77,7 +77,7 @@ class CostSummaryView(APIView):
 
 
 class RecentRunsView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated, HasPerm("billing.view")]
 
     def get(self, request):
         runs = (
@@ -119,7 +119,7 @@ class RecentRunsView(APIView):
 
 
 class FxRefreshView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated, HasPerm("billing.view")]
 
     def post(self, request):
         rate = refresh_rate()
@@ -129,8 +129,16 @@ class FxRefreshView(APIView):
 
 
 class CapView(APIView):
-    """GET / PUT the current (default) org's monthly spend cap and usage."""
-    permission_classes = [AllowAny]
+    """GET / PUT the current (default) org's monthly spend cap and usage.
+
+    GET: anyone with billing.view (Admin, Accountant).
+    PUT: org admin only — cap changes shouldn't be in Accountant's hands.
+    """
+
+    def get_permissions(self):
+        if self.request.method == "PUT":
+            return [IsAuthenticated(), IsOrgAdmin()]
+        return [IsAuthenticated(), HasPerm("billing.view")]
 
     def _org(self, request):
         if request.user.is_authenticated and request.user.memberships.exists():

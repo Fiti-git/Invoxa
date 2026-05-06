@@ -10,13 +10,14 @@ import logging
 from typing import Optional
 
 import requests
+from django.conf import settings
 from django.core.cache import cache
 
 from apps.settings_app.services import get_setting
 
 log = logging.getLogger(__name__)
 
-CACHE_KEY = "fx:usd_lkr:v2"
+CACHE_KEY = "fx:usd_lkr:v3"
 CACHE_TTL_SECONDS = 24 * 60 * 60  # daily refresh
 
 
@@ -35,7 +36,7 @@ def _fetch_rate() -> Optional[Decimal]:
         rate = data.get("conversion_rates", {}).get("LKR")
         if rate is None:
             return None
-        return Decimal(str(rate))
+        return Decimal(str(rate)) + settings.FX_MARKUP_LKR
     except Exception as e:
         log.warning("ExchangeRate-API fetch failed: %s", e)
         return None
